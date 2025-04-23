@@ -1,0 +1,159 @@
+import tkinter as tk
+from tkinter import ttk
+from scapy.all import sniff, IP
+import threading
+import time
+import psutil
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+class SniffeurReseau:
+    def __init__(self, racine):
+        self.racine = racine
+        self.racine.title("Sniffeur Réseau")
+        self.racine.geometry("900x600")
+
+        self.mode_actif = "clair"
+
+        self.haut = tk.Frame(self.racine)
+        self.haut.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+
+        self.zone_graphique = tk.Frame(self.haut)
+        self.zone_graphique.pack(side=tk.LEFT, padx=5)
+
+        self.zone_commandes = tk.Frame(self.haut)
+        self.zone_commandes.pack(side=tk.RIGHT, padx=5)
+
+        self.zone_bas = tk.Frame(self.racine)
+        self.zone_bas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0,10))
+
+        self.entrees = []
+        self.sorties = []
+        self.figure, self.axes = plt.subplots(figsize=(4, 2))
+        self.ligne_entree, = self.axes.plot([], [], label="Entrant (KB/s)", color="blue")
+        self.ligne_sortie, = self.axes.plot([], [], label="Sortant (KB/s)", color="green")
+        self.axes.set_xlim(0, 60)
+        self.axes.set_ylim(0, 200)
+        self.axes.set_title("Utilisation Réseau", fontsize=10)
+        self.axes.legend(fontsize=8)
+        self.axes.tick_params(labelsize=7)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.zone_graphique)
+        self.canvas.get_tk_widget().pack()
+
+        self.texte_etat = tk.Label(self.zone_commandes, text="État : En attente...", font=("Segoe UI", 10))
+        self.texte_etat.pack(pady=5)
+
+        self.en_pause = False
+        self.bouton_pause = tk.Button(self.zone_commandes, text="⏸ Pause", command=self.pause_toggle)
+        self.bouton_pause.pack(pady=5, fill=tk.X)
+
+        self.bouton_effacer = tk.Button(self.zone_commandes, text="🧹 Effacer", command=self.effacer_liste)
+        self.bouton_effacer.pack(pady=5, fill=tk.X)
+
+        self.menu_filtre = ttk.Combobox(self.zone_commandes, values=["Tous", "TCP", "UDP", "ICMP"])
+        self.menu_filtre.current(0)
+        self.menu_filtre.pack(pady=5, fill=tk.X)
+
+        self.bouton_theme = tk.Button(self.zone_commandes, text="🎨 Mode clair/sombre", command=self.changer_theme)
+        self.bouton_theme.pack(pady=5, fill=tk.X)
+
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("Treeview", font=("Segoe UI", 10), rowheight=25)
+        style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
+
+        self.liste_paquets = ttk.Treeview(self.zone_bas, columns=("heure", "source", "destination", "protocole"), show="headings")
+        for titre in ["heure", "source", "destination", "protocole"]:
+            self.liste_paquets.heading(titre, text=titre.capitalize())
+        self.liste_paquets.pack(fill=tk.BOTH, expand=True)
+
+        barre_defil = ttk.Scrollbar(self.zone_bas, orient=tk.VERTICAL, command=self.liste_paquets.yview)
+        self.liste_paquets.configure(yscroll=barre_defil.set)
+        barre_defil.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.actif = True
+        threading.Thread(target=self.mettre_a_jour_graphique, daemon=True).start()
+        threading.Thread(target=self.sniffer_paquets, daemon=True).start()
+        self.changer_theme()  # Applique thème au démarrage
+
+    def pause_toggle(self):
+        self.en_pause = not self.en_pause
+        self.bouton_pause.config(text="▶ Reprendre" if self.en_pause else "⏸ Pause")
+
+    def effacer_liste(self):
+        for item in self.liste_paquets.get_children():
+            self.liste_paquets.delete(item)
+
+    def changer_theme(self):
+        if self.mode_actif == "clair":
+            fond, texte = "#000000", "#ffffff"
+            self.mode_actif = "sombre"
+        else:
+            fond, texte = "#ffffff", "#000000"
+            self.mode_actif = "clair"
+
+        self.racine.configure(bg=fond)
+        for cadre in [self.haut, self.zone_graphique, self.zone_commandes, self.zone_bas]:
+            cadre.configure(bg=fond)
+        for widget in [self.texte_etat, self.bouton_pause, self.bouton_effacer, self.bouton_theme]:
+            widget.configure(bg=fond, fg=texte)
+
+        self.axes.set_facecolor(fond)
+        self.figure.patch.set_facecolor(fond)
+        self.axes.title.set_color(texte)
+        self.axes.tick_params(colors=texte)
+        self.canvas.draw()
+
+        style = ttk.Style()
+        style.configure("Treeview", background=fond, fieldbackground=fond, foreground=texte)
+
+    def mettre_a_jour_graphique(self):
+        precedent = psutil.net_io_counters()
+        while self.actif:
+            time.sleep(1)
+            actuel = psutil.net_io_counters()
+            entree = (actuel.bytes_recv - precedent.bytes_recv) / 1024
+            sortie = (actuel.bytes_sent - precedent.bytes_sent) / 1024
+            precedent = actuel
+            self.entrees.append(entree)
+            self.sorties.append(sortie)
+            if len(self.entrees) > 60:
+                self.entrees.pop(0)
+                self.sorties.pop(0)
+            self.ligne_entree.set_data(range(len(self.entrees)), self.entrees)
+            self.ligne_sortie.set_data(range(len(self.sorties)), self.sorties)
+            self.axes.set_ylim(0, max(self.entrees + self.sorties + [50]))
+            self.canvas.draw()
+            if max(entree, sortie) < 100:
+                self.texte_etat.config(text="État : Normal", fg="green")
+            else:
+                self.texte_etat.config(text="État : Suspect", fg="red")
+
+    def sniffer_paquets(self):
+        sniff(prn=self.traiter_paquet, store=False)
+
+    def traiter_paquet(self, paquet):
+        if self.en_pause:
+            return
+        if IP in paquet:
+            heure = time.strftime("%H:%M:%S")
+            source = paquet[IP].src
+            destination = paquet[IP].dst
+            identifiant_protocole = paquet[IP].proto
+            nom_protocole = {6: "TCP", 17: "UDP", 1: "ICMP"}.get(identifiant_protocole, str(identifiant_protocole))
+            filtre = self.menu_filtre.get()
+            if filtre != "Tous" and filtre != nom_protocole:
+                return
+            self.liste_paquets.insert("", 0, values=(heure, source, destination, nom_protocole))
+            if len(self.liste_paquets.get_children()) > 200:
+                for i in self.liste_paquets.get_children()[200:]:
+                    self.liste_paquets.delete(i)
+
+    def stop(self):
+        self.actif = False
+
+if __name__ == "__main__":
+    fenetre = tk.Tk()
+    application = SniffeurReseau(fenetre)
+    fenetre.mainloop()
+    fenetre.iconbitmap("logo.ico")
