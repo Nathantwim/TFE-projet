@@ -78,10 +78,6 @@ class SniffeurReseau:
             self.liste_paquets.heading(col, text=col.capitalize())
         self.liste_paquets.pack(fill=tk.BOTH, expand=True)
 
-        # Barre de défilement pour la liste
-        scrollbar = ttk.Scrollbar(self.bas, orient=tk.VERTICAL, command=self.liste_paquets.yview)
-        self.liste_paquets.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Style pour Treeview personnalisé (fond clair au départ)
         self.style = ttk.Style()
